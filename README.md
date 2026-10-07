@@ -4,8 +4,6 @@ MuConvert-Alpha
 
 支持地雷键、TouchStar、Hold/TouchHold头的Slide、相邻键直线的Slide比如1-2-3-4[4:1]、SSS/D 区滑条、SlideCode、SV/HS、弹跳出现note/修改note出生位置/note透明度、独立音符流、假键、噪域、字幕及多种屏幕特效
 
-有校验，只有检测到谱面中包含Sinmai-Alpha要素的时候才会启用模组特性，也就是游玩原版谱面不会有被此模组影响的可能。
-
 
 
 
