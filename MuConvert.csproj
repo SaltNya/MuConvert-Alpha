@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <LangVersion>preview</LangVersion>
         <Authors>Starrah; MuNet Team</Authors>
         <Copyright>Copyright © 2026 Starrah &amp; MuNet Team</Copyright>
         <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
@@ -42,7 +43,7 @@
 
     <ItemGroup>
       <PackageReference Include="Antlr4.Runtime.Standard" Version="4.13.1" />
-      <PackageReference Include="Antlr4BuildTasks" Version="12.14.0" />
+      <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
       <PackageReference Include="MinVer" Version="7.0.0">
         <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         <PrivateAssets>all</PrivateAssets>
@@ -55,13 +56,24 @@
         <MinVerDefaultPreReleaseIdentifiers>alpha</MinVerDefaultPreReleaseIdentifiers>
     </PropertyGroup>
 
+    <!-- ANTLR generated parser: regenerate from parser\mai\Simai.g4 with
+         java -jar antlr4-4.13.1-complete.jar -Dlanguage=CSharp -no-listener -visitor -package MuConvert.Antlr -o generated parser\mai\Simai.g4
+         (Antlr4BuildTasks file-discovery corrupts non-ASCII paths on zh-CN Windows, so generated files are checked in directly;
+         generated\*.cs are auto-included by SDK default compile globs.) -->
     <ItemGroup>
-      <Antlr4 Include="parser\\mai\\Simai.g4">
-        <Generator>MSBuild:Compile</Generator>
-        <Listener>false</Listener>
-        <Visitor>true</Visitor>
-        <Package>MuConvert.Antlr</Package>
-      </Antlr4>
+      <None Include="generated\Simai.interp" />
+      <None Include="generated\Simai.tokens" />
+      <None Include="generated\SimaiLexer.interp" />
+      <None Include="generated\SimaiLexer.tokens" />
     </ItemGroup>
 
+    <!-- Append the new helpers after existing source files so established
+         compiler-generated method and closure names remain unchanged. -->
+    <ItemGroup>
+      <Compile Remove="parser\mai\SimaiParser.HoldSlideHead.cs" />
+      <Compile Remove="generator\mai\MA2Generator.AdjacentStraight.cs" />
+      <Compile Include="parser\mai\SimaiParser.HoldSlideHead.cs" />
+      <Compile Include="generator\mai\MA2Generator.AdjacentStraight.cs" />
+    </ItemGroup>
+<ItemGroup><Compile Remove="visual\JudgeLineExpansionCommands.cs" /><Compile Include="visual\JudgeLineExpansionCommands.cs" /></ItemGroup>
 </Project>

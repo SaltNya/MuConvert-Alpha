@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using MuConvert.chu;
 using MuConvert.mai;
+using MuConvert.media;
 using MuConvert.utils;
 using Rationals;
 
@@ -78,6 +79,13 @@ internal static class Program
             DefaultValueFactory = _ => false
         };
 
+        var leadingBarOption = new Option<bool>("--leading-bar")
+        {
+            Description = "在谱面开头加入一小节空白（第一押出现在第二小节之后；仅Simai转MA2模式有效，供测试谱使用）",
+            Arity = ArgumentArity.ZeroOrOne,
+            DefaultValueFactory = _ => false
+        };
+
         var inputArgument = new Argument<string>("path")
         {
             Description = "可以输入文件或目录。会自动根据输入的类型，智能执行相应的转换程序。\n" +
@@ -90,6 +98,7 @@ internal static class Program
         root.Options.Add(outputOption);
         root.Options.Add(strictOption);
         root.Options.Add(laxOption);
+        root.Options.Add(leadingBarOption);
         root.Arguments.Add(inputArgument);
 
         root.SetAction(parseResult =>
@@ -106,6 +115,7 @@ internal static class Program
             if (cliStrict && cliLax) throw new ArgumentException("不能同时指定 --strict 与 --lax。");
             else if (cliStrict) _simaiStrictLevel = SimaiParser.StrictLevelEnum.Strict;
             else if (cliLax) _simaiStrictLevel = SimaiParser.StrictLevelEnum.Lax;
+            _leadingBar = parseResult.GetValue(leadingBarOption);
 
             RunConvert(inputPath, levelsRaw);
         });
@@ -116,6 +126,9 @@ internal static class Program
     /// <summary>由 CLI 在每次 <c>SetAction</c> 入口赋值；转换逻辑只读此字段。</summary>
     private static OutputSpec _outputSpec;
     private static SimaiParser.StrictLevelEnum _simaiStrictLevel = SimaiParser.StrictLevelEnum.Normal;
+
+    /// <summary>由 CLI 赋值；true 时在 Simai → MA2 输出开头插入一小节空白（测试谱用）。</summary>
+    private static bool _leadingBar;
     
     /// <summary>由 CLI 赋值；为 null 表示按输入类型使用默认输出格式，否则为小写的目标格式名（如 sus、ma2）。</summary>
     private static string? _cliTargetNormalized;
@@ -390,6 +403,9 @@ internal static class Program
     private static void ConvertMaidata(Maidata maidata, IReadOnlyList<int> selected, string inputDir, string inputPath)
     {
         var baseDir = _outputSpec.ResolveOutputDir(inputDir);
+        var mediaProject = MediaTimelineProject.LoadWorking(inputDir);
+        if (_outputSpec.Kind == OutputSinkKind.Stdout && mediaProject.HasAudioTimeline)
+            throw new ArgumentException("包含音频时间轴的谱面需要指定输出目录，以导出主 BGM。");
         foreach (var id in selected)
         {
             var outPath = _outputSpec.Kind == OutputSinkKind.File ? _outputSpec.FsPath! : Path.Combine(baseDir, $"lv_{id}.ma2");
@@ -398,10 +414,36 @@ internal static class Program
             var chartInfo = maidata.Levels[id];
             var bigTouch = id is 2 or 3;
             var isUtage = IsUtageFromLevelString(chartInfo.Level);
-            var ma2 = SimaiToMa2(chartInfo.Inote, maidata.ClockCount, bigTouch, isUtage, _simaiStrictLevel, maidata.First);
+            var ma2 = mediaProject.Clips.Count == 0
+                ? SimaiToMa2(chartInfo.Inote, maidata.ClockCount, bigTouch, isUtage, _simaiStrictLevel, maidata.First, _leadingBar)
+                : SimaiProjectToMa2(chartInfo.Inote, inputDir, mediaProject, maidata.ClockCount, bigTouch, isUtage, maidata.First);
             if (_outputSpec.Kind == OutputSinkKind.Stdout) Console.Out.Write(ma2);
-            else File.WriteAllText(outPath, ma2, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            else
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+                File.WriteAllText(outPath, ma2, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                AquaMai.ChartVisuals.MediaCommands.CopyAssets(ma2, inputDir, Path.GetDirectoryName(Path.GetFullPath(outPath))!, Console.Error.WriteLine);
+                AquaMai.ChartVisuals.NoteSkin.CopyAssets(ma2, inputDir, Path.GetDirectoryName(Path.GetFullPath(outPath))!, Console.Error.WriteLine);
+                // 带 MA2 校验值的原始特效数据供 MCM 的 Alpha 预览使用。
+                // 媒体时间轴需要完整工程，不能用不完整预览覆盖真实演出。
+                var previewPath = Path.ChangeExtension(outPath, ".alpha-preview.json");
+                if (mediaProject.Clips.Count == 0)
+                {
+                    var startBpm = decimal.Parse(ma2.Split('\n').First(line => line.StartsWith("BPM_DEF\t")).Split('\t')[1], System.Globalization.CultureInfo.InvariantCulture);
+                    var preview = new {
+                        Schema = 1, ChartSha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(outPath))),
+                        Inote = chartInfo.Inote, OffsetSeconds = (double)maidata.First + (_leadingBar ? 240d / (double)startBpm : 0),
+                        Title = maidata.Title, Artist = maidata.Artist, Designer = chartInfo.NoteDesigner ?? "", Level = chartInfo.Level ?? "",
+                        ClockCount = maidata.ClockCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    };
+                    File.WriteAllText(previewPath, System.Text.Json.JsonSerializer.Serialize(preview));
+                }
+                else if (File.Exists(previewPath)) File.Delete(previewPath);
+
+            }
         }
+        if (_outputSpec.Kind != OutputSinkKind.Stdout)
+            ExportTimelineAudio(mediaProject, inputDir, _outputSpec.Kind == OutputSinkKind.File ? Path.GetDirectoryName(Path.GetFullPath(_outputSpec.FsPath!))! : baseDir);
     }
 
     private static void ConvertPlainSimai(string text, string inputDir, string inputPath)
@@ -411,9 +453,45 @@ internal static class Program
         var outPath = _outputSpec.Kind == OutputSinkKind.File ? _outputSpec.FsPath! : Path.Combine(baseDir, $"lv_{outputLevel}.ma2");
         var destNote = _outputSpec.Kind == OutputSinkKind.Stdout ? "（标准输出）" : outPath;
         Console.Error.WriteLine($"Simai → MA2: {inputPath}(lv{outputLevel}) → {destNote}");
-        var ma2 = SimaiToMa2(text, strictLevel: _simaiStrictLevel);
+        var mediaProject = MediaTimelineProject.LoadWorking(inputDir);
+        if (_outputSpec.Kind == OutputSinkKind.Stdout && mediaProject.HasAudioTimeline)
+            throw new ArgumentException("包含音频时间轴的谱面需要指定输出目录，以导出主 BGM。");
+        var ma2 = mediaProject.Clips.Count == 0 ? SimaiToMa2(text, strictLevel: _simaiStrictLevel, leadingBar: _leadingBar)
+            : SimaiProjectToMa2(text, inputDir, mediaProject);
         if (_outputSpec.Kind == OutputSinkKind.Stdout) Console.Out.Write(ma2);
-        else File.WriteAllText(outPath, ma2, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        else
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+            File.WriteAllText(outPath, ma2, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            AquaMai.ChartVisuals.MediaCommands.CopyAssets(ma2, inputDir, Path.GetDirectoryName(Path.GetFullPath(outPath))!, Console.Error.WriteLine);
+            AquaMai.ChartVisuals.NoteSkin.CopyAssets(ma2, inputDir, Path.GetDirectoryName(Path.GetFullPath(outPath))!, Console.Error.WriteLine);
+            ExportTimelineAudio(mediaProject, inputDir, Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+        }
+    }
+
+    private static string SimaiProjectToMa2(string inote, string inputDir, MediaTimelineProject mediaProject,
+        int clockCount = 4, bool bigTouch = false, bool isUtage = false, float first = 0)
+    {
+        var (chart, parseAlerts) = new SimaiParser(bigTouch, clockCount, _simaiStrictLevel).Parse(inote);
+        if (_leadingBar) chart.Shift((Rational)1, chart.StartBpm);
+        if (first != 0) chart.Shift((Rational)(decimal)first * (Rational)chart.StartBpm / 240, chart.StartBpm);
+        // These are absolute source-music times. --leading-bar and &first
+        // move notes only; neither is an audio padding in this CLI.
+        MediaTimelineImport.Apply(chart, mediaProject, inputDir, warning: Console.Error.WriteLine);
+        PrintAlerts(parseAlerts);
+        var (ma2, genAlerts) = new MA2Generator(isUtage).Generate(chart);
+        PrintAlerts(genAlerts);
+        return ma2;
+    }
+    private static void ExportTimelineAudio(MediaTimelineProject project, string inputDir, string outputDir)
+    {
+        if (!project.HasAudioTimeline) return;
+        var executable = Environment.GetEnvironmentVariable("MUCONVERT_FFMPEG");
+        if (string.IsNullOrWhiteSpace(executable))
+            executable = new[] { Path.Combine(AppContext.BaseDirectory, "ffmpeg.exe"), Path.Combine(AppContext.BaseDirectory, "FFMpeg", "ffmpeg.exe") }.FirstOrDefault(File.Exists) ?? "ffmpeg";
+        var source = MediaTimelineAudio.BuildAsync(project, inputDir, Path.Combine(outputDir, "media_timeline_bgm.wav"), executable).GetAwaiter().GetResult();
+        if (source != null) Console.Error.WriteLine("时间轴主 BGM（制作 ACB 时使用此文件）: " + source);
+        else Console.Error.WriteLine("音频时间轴未找到可读取的音源。");
     }
 
     private static void ValidateOutputForMa2Targets(int ma2FileCount)
@@ -443,6 +521,8 @@ internal static class Program
     {
         if (_simaiStrictLevel != SimaiParser.StrictLevelEnum.Normal)
             throw new ArgumentException($"--strict / --lax 仅适用于 Simai（.txt / maidata 或纯 inote）转 MA2，不能用于{contextSuffix}。");
+        if (_leadingBar)
+            throw new ArgumentException($"--leading-bar 仅适用于 Simai（.txt / maidata 或纯 inote）转 MA2，不能用于{contextSuffix}。");
     }
 
     private static readonly Dictionary<string, string[]> chuTargetsDict = new()
@@ -517,9 +597,15 @@ internal static class Program
     }
 
     private static string SimaiToMa2(string inote, int clockCount = 4, bool bigTouch = false, bool isUtage = false,
-        SimaiParser.StrictLevelEnum strictLevel = SimaiParser.StrictLevelEnum.Normal, float first = 0f)
+        SimaiParser.StrictLevelEnum strictLevel = SimaiParser.StrictLevelEnum.Normal, float first = 0f, bool leadingBar = false)
     {
         var (chart, parseAlerts) = new SimaiParser(bigTouch, clockCount, strictLevel).Parse(inote);
+        if (leadingBar)
+        {
+            // --leading-bar：整谱向后平移一小节（4/4 一拍一小节），使第一押落在第二小节之后。
+            // 与 MaiChartManager 自带转谱行为对齐，供测试谱使用。
+            chart.Shift((Rational)1, chart.StartBpm);
+        }
         if (first != 0f)
         {
             // &first（秒）：第一小节从音频起点后 first 秒开始。ma2 没有 first 字段

@@ -50,7 +50,7 @@ public static class SlideTypeTool
         throw Utils.Fail();
     }
 
-    public static SlideType FromSimai(string s, int? startKey, int? endKey)
+    public static SlideType FromSimai(string s, int? startKey, int? endKey, bool endIsTouch = false)
     {
         if (s[0] is >= '1' and <= '8')
         {
@@ -59,6 +59,8 @@ public static class SlideTypeTool
         }
         switch (s[0])
         {
+            case 'P':
+            case 'Q': return SlideType.SI_; // RawShape carries the selector to native TG1 geometry.
             case '-': return SlideType.SI_;
             case 'v': return SlideType.SV_;
             case '<':
@@ -71,7 +73,9 @@ public static class SlideTypeTool
                 Utils.Assert(startKey != null, "startKey没传进来");
                 Utils.Assert(endKey != null, "endKey没传进来");
                 var distance = (endKey - startKey + 8) % 8; // 先假设按顺时针的方向走，看看距离
-                if (distance is 0 or 4) throw new ArgumentException(string.Format(Locale.InvalidSlide, $"{startKey}{s}(^的endKey不能是整半圈)"));
+                // 终点是 touch 区（B/D/E/C）时无"半圈"概念（触区键号只是区内位置），不做 0/4 检查；
+                // 只有环键终点才要求 ^ 必须是最短弧。
+                if (!endIsTouch && distance is 0 or 4) throw new ArgumentException(string.Format(Locale.InvalidSlide, $"{startKey}{s}(^的endKey不能是整半圈)"));
                 return distance < 4 ? SlideType.SCR : SlideType.SCL; // <4说明顺时针走更近；反之如果顺时针走的距离>4，则说明逆时针更近。
             case 'p':
                 if (s.Length > 1 && s[1] == 'p') return SlideType.SXL; // pp
