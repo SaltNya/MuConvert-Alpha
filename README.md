@@ -1,6 +1,6 @@
 MuConvert-Alpha
 ================
-# Sinmai-Alpha 转谱支持
+## Sinmai-Alpha 转谱支持
 
 支持当前 Alpha 扩展：TouchStar、Hold/TouchHold 滑条头、相邻键直线、SSS/D 区滑条、SlideCode、SV/HS、弹跳/出生/消失、独立流、假音符、噪域、字幕、地雷键、自定义note皮肤及屏幕特效。旧 SC 保留原行为。
 仍可使用普通 MA2；扩展记录需安装 Sinmai-Alpha。
