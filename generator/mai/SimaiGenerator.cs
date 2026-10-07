@@ -32,6 +32,9 @@ public class SimaiGenerator : IGenerator<MaiChart>
      * 如果你不希望开启本选项，请new SimaiGenerator() { Workaround_ForceUseAbsDurationForSlidesWithNonStandardWaitTime = false } 即可。
      */
     public bool Workaround_ForceUseAbsDurationForSlidesWithNonStandardWaitTime = true;
+    // 预览适配器可以注入已有 MA2 的扩展记录，默认转谱行为不变。
+    public List<(Rational Time, string Text, bool Command)> AdditionalExpressions = [];
+    public Func<Note, string, string>? DecorateNote;
     /**
      * 这是一个Workaround的选项。
      * 形如[120#3.45]的，BPM+绝对时间的星星持续时长写法，尽管Simai官方文档中明确其为标准语法，但AstroDX中会无法解析（直接报错拒绝运行）。
@@ -162,39 +165,52 @@ public class SimaiGenerator : IGenerator<MaiChart>
             }
 
             string res;
-            if (note is Hold hold)
+            if (note is BorrowedNote borrowed)
             {
-                res = $"{hold.Key}h{hold.Modifiers}{DurationStr(hold)}";
+                res = borrowed.Trajectory.Source;
+            }
+            else if (note is Hold hold)
+            {
+                res = $"{hold.Key}{(hold.IsDZone ? "d" : "")}{(hold.Skin == null ? "" : AquaMai.ChartVisuals.NoteSkin.FormatExpression(hold.Skin))}h{hold.Modifiers}{DurationStr(hold)}";
             }
             else if (note is Tap tap)
             {
-                var starModifier = tap is Star ? "$" : "";
-                res = $"{tap.Key}{starModifier}{tap.Modifiers}";
+                var starModifier = tap is Star star ? star.IsFakeRotate ? "$$" : "$" : "";
+                res = $"{tap.Key}{(tap.IsDZone ? "d" : "")}{(tap.Skin == null ? "" : AquaMai.ChartVisuals.NoteSkin.FormatExpression(tap.Skin))}{starModifier}{tap.Modifiers}";
             }
             else if (note is TouchHold th)
             {
-                res = $"{th.TouchArea}h{th.Modifiers}{DurationStr(th)}";
+                res = $"{th.TouchArea}{(th.Skin == null ? "" : AquaMai.ChartVisuals.NoteSkin.FormatExpression(th.Skin))}h{th.Modifiers}{DurationStr(th)}";
             }
             else if (note is Touch touch)
             {
-                res = $"{touch.TouchArea}{touch.Modifiers}";
+                var radius = touch.CustomRadius > 0
+                    ? AquaMai.ChartVisuals.TouchRadius.FormatExpression(touch.CustomRadius) : "";
+                res = $"{touch.TouchArea}{radius}{(touch.Skin == null ? "" : AquaMai.ChartVisuals.NoteSkin.FormatExpression(touch.Skin))}{(touch is TouchStar ? "$" : "")}{touch.Modifiers}";
             }
             else if (note is Slide slide)
             {
+                static string OrbitPosition(string area, int key, bool dZone) => dZone ? key.ToString(System.Globalization.CultureInfo.InvariantCulture) + "d" : area == "C" ? "C" :
+                    area.Length != 0 ? area + key : key.ToString() + (dZone ? "d" : "");
+                var orbitStart = OrbitPosition(slide.StartArea, slide.Key, slide.StartIsDZone);
                 // 处理头
                 if (slide.SharedHeadWith != null) res = "*";
                 else if (slide.OwnHead != null)
                 {
                     var starModifier = slide.OwnHead is not Star ? "@" : "";
-                    res = $"{slide.Key}{starModifier}{slide.OwnHead.Modifiers}";
+                    res = slide.HasSelectableOrbit ? orbitStart + starModifier + slide.OwnHead.Modifiers :
+                        $"{slide.Key}{(slide.StartIsDZone ? "d" : "")}{starModifier}{slide.OwnHead.Modifiers}";
                 }
-                else res = $"{slide.Key}?";
+                else if (slide.HasSelectableOrbit && slide.StartArea.Length != 0 && !slide.StartIsDZone)
+                    res = orbitStart + (slide.NoHead ? "?" : "") + (slide.HeadIsBreak ? "b" : "") +
+                        (slide.HeadIsMine ? "m" : "") + (slide.HeadIsFirework ? "f" : "");
+                else res = slide.HasSelectableOrbit ? orbitStart + "?" : $"{slide.Key}{(slide.StartIsDZone ? "d" : "")}?";
 
                 Rational rollingTime = slide.Time;
                 foreach (var seg in slide.segments)
                 {
-                    res += seg.Type.ToSimai(seg.StartKey);
-                    res += seg.EndKey;
+                    res += slide.HasSelectableOrbit ? seg.RawShape ?? seg.Type.ToSimai(seg.StartKey) : seg.Type.ToSimai(seg.StartKey);
+                    res += slide.HasSelectableOrbit ? OrbitPosition(seg.EndArea, seg.EndKey, seg.EndIsDZone) : seg.EndKey.ToString();
                     
                     if (seg.Duration != null)
                     {
@@ -247,6 +263,7 @@ public class SimaiGenerator : IGenerator<MaiChart>
                 }
                 else
                 {
+                    if (DecorateNote != null) res = DecorateNote(note, res);
                     var simaiNote = new SimaiNote(time, res, slide.FalseEachIdx);
                     buf.Add(simaiNote);
                     res = ""; // 我自己加进simaiNote里去，循环外面的公共逻辑就不要加了
@@ -255,10 +272,12 @@ public class SimaiGenerator : IGenerator<MaiChart>
             }
             else throw Utils.Fail("SimaiGenerator遇到了未知的Note对象");
 
-            if (!string.IsNullOrEmpty(res)) buf.Add(new SimaiNote(time, res, note.FalseEachIdx));
+            if (!string.IsNullOrEmpty(res)) buf.Add(new SimaiNote(time, DecorateNote?.Invoke(note, res) ?? res, note.FalseEachIdx));
             noteIdx++;
         }
         
+        foreach (var item in AdditionalExpressions) buf.Add(new SimaiNote(item.Time, item.Text, 0, item.Command));
+        buf = buf.OrderBy(n => n.Time).ThenBy(n => n.IsBpm ? 0 : 1).ToList();
         // 基于buf中的内容，写入result生成字符串
         BigInteger baseDiv = 1; // 目标的div数。生成逗号时，会尽量使结果接近这个目标div数。
         BigInteger baseDivBar = -1; // 上述baseDiv对应的小节编号。我们的策略是对每个小节重算baseDiv，因此需要记录这个信息。
