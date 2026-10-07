@@ -49,7 +49,7 @@ public class Maidata : Dictionary<string, string>
         var content = new StringBuilder();
         foreach (var line in maidataTxt.EnumerateLines())
         {
-            if (line.Length > 0 && line[0] == '&')
+            if (line.Length > 0 && line[0] == '&' && !IsSectionMarker(line))
             {
                 // 找到了新的标签，把旧的放进去
                 _putKey(key, content);
@@ -78,6 +78,10 @@ public class Maidata : Dictionary<string, string>
             value = value.Trim(); // 对部分字段，要trim一下；但不能对所有的字段都trim，比如如果对title进行trim，如月车站就寄了。
         this[key] = value;
     }
+
+    private static bool IsSectionMarker(ReadOnlySpan<char> line) =>
+        EditorDirectiveScanner.TryRead(line.ToString(), 0, out var directive) &&
+        directive.kind is EditorDirectiveKind.SectionReset or EditorDirectiveKind.SectionColor;
 
     private (Dictionary<int, MaidataLevel>, Dictionary<string, string>) _splitLevels()
     {
@@ -113,7 +117,7 @@ public class Maidata : Dictionary<string, string>
     
     public float? WholeBpm
     {
-        get => float.TryParse(this.GetValueOrDefault("wholebpm", ""), out var wholebpm) ? wholebpm : null;
+        get => TryReadNumber(this.GetValueOrDefault("wholebpm", ""), out var wholebpm) ? wholebpm : null;
         set
         {
             if (value is null) Remove("wholebpm");
@@ -123,9 +127,16 @@ public class Maidata : Dictionary<string, string>
     
     public float First
     {
-        get => float.TryParse(this.GetValueOrDefault("first", ""), out var first) ? first : 0f;
-        set => this["first"] = $"{value:0.####}";
+        get => TryReadNumber(this.GetValueOrDefault("first", ""), out var first) ? first : 0f;
+        set => this["first"] = value.ToString("0.####", CultureInfo.InvariantCulture);
     }
+
+    // Simai uses a decimal point regardless of the player's Windows language.
+    // Keep the editor's local decimal fallback for existing metadata files,
+    // without interpreting the decimal point as a thousands separator.
+    private static bool TryReadNumber(string text, out float value) =>
+        float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value) ||
+        float.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value);
     
     public int ClockCount
     {
@@ -137,8 +148,8 @@ public class Maidata : Dictionary<string, string>
     {
         get
         {
-            if (!float.TryParse(this.GetValueOrDefault("demo_seek", ""), out var demoStart)) return null;
-            float? demoLen = float.TryParse(this.GetValueOrDefault("demo_len", ""), out var v) ? v : null;
+            if (!TryReadNumber(this.GetValueOrDefault("demo_seek", ""), out var demoStart)) return null;
+            float? demoLen = TryReadNumber(this.GetValueOrDefault("demo_len", ""), out var v) ? v : null;
             return (demoStart, demoLen);
         }
         set
@@ -151,9 +162,9 @@ public class Maidata : Dictionary<string, string>
             }
 
             var (start, len) = value.Value;
-            this["demo_seek"] = $"{start:0.####}";
+            this["demo_seek"] = start.ToString("0.####", CultureInfo.InvariantCulture);
             if (len is null) Remove("demo_len");
-            else this["demo_len"] = $"{len:0.####}";
+            else this["demo_len"] = len.Value.ToString("0.####", CultureInfo.InvariantCulture);
         }
     }
 
