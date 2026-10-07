@@ -12,6 +12,19 @@ public class Statistics
 
     private void AddNote(Note note)
     {
+        // A slide's visual head and body can be fake independently.
+        if (note is Slide withHead)
+        {
+            if (withHead.OwnHead != null) AddNote(withHead.OwnHead);
+            else if (withHead.SharedHeadWith == null && !withHead.NoHead && withHead.StartArea != "" && !withHead.HeadIsFake)
+            {
+                var head = new Touch(withHead.Chart, withHead.Time) { IsBreak = withHead.HeadIsBreak, IsFirework = withHead.HeadIsFirework };
+                head.TouchArea = withHead.Key == 0 ? withHead.StartArea : withHead.StartArea + withHead.Key;
+                AddNote(head);
+            }
+        }
+        if (note.IsFake) return;
+        if (note is Tap { IsFirework: true }) Firework++;
         string prefix = "NM";
         if (note.IsBreak && note.IsEx) prefix = "BX";
         else if (note.IsBreak) prefix = "BR";
@@ -29,13 +42,6 @@ public class Statistics
         else if (note is Slide slide)
         {
             type = "SLD";
-            if (slide.OwnHead != null) AddNote(slide.OwnHead);
-            else if (slide.SharedHeadWith == null && slide.StartArea != "")
-            { // 自定义slide的touchstar头（NMSTP/BRSTP/MNTTP/MBTTP）：按TTP计入
-                var touchStar = new Touch(slide.Chart, slide.Time);
-                touchStar.TouchArea = slide.Key == 0 ? slide.StartArea : slide.StartArea + slide.Key;
-                AddNote(touchStar);
-            }
         }
         else throw Utils.Fail();
 

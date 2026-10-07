@@ -10,12 +10,16 @@ namespace MuConvert.mai;
  */
 public abstract class Note: BaseNote
 {
-    public readonly MaiChart Chart;
+    public MaiChart Chart { get; internal set; }
     protected int _key;
     
     public bool IsBreak;
     public bool IsEx;
     public bool IsMine; // 地雷键（AquaMai mod）
+    public bool IsFake; // Render-only: no input, judgment, score or hit effect.
+    public bool IgnoreSV;
+    public AquaMai.ChartVisuals.VisualNote? Visual;
+    public string? Skin;
 
     public int FalseEachIdx = 0; // 如果>0，表示这是一个伪双押，数字越大、延后的时刻越多
 
@@ -49,7 +53,7 @@ public abstract class Note: BaseNote
         Time = time;
     }
     
-    public virtual string Modifiers => (IsMine ? "m" : "") + (IsBreak ? "b" : "") + (IsEx ? "x" : "");
+    public virtual string Modifiers => (IsMine ? "m" : "") + (IsBreak ? "b" : "") + (IsEx ? "x" : "") + (IgnoreSV ? "c" : "");
 
     // 当前音符落在了哪些BPM区间内、分别有多长。
     public List<(int bpmIdx, decimal bpm, Rational start, Rational len)> BpmRanges =>
@@ -63,17 +67,26 @@ public abstract class Note: BaseNote
 [DebuggerDisplay("{DebuggerDisplay(),nq}")]
 public class Tap(MaiChart chart, Rational time) : Note(chart, time)
 {
+    public bool IsDZone;
+    public bool IsFirework; // f on Tap/Star/Hold; separate from rotation ($$).
     public Tap(Tap inTake): this(inTake.Chart, inTake.Time) // 拷贝构造函数
     {
         IsBreak = inTake.IsBreak;
         IsEx = inTake.IsEx;
         IsMine = inTake.IsMine;
+        IsFake = inTake.IsFake;
+        IgnoreSV = inTake.IgnoreSV;
+        IsFirework = inTake.IsFirework;
+        Visual = inTake.Visual;
+        Skin = inTake.Skin;
+        IsDZone = inTake.IsDZone;
         FalseEachIdx = inTake.FalseEachIdx;
         StreamId = inTake.StreamId;
         Key = inTake.Key;
     }
 
     internal override string DebuggerDisplay() => $"{Key}{Modifiers}";
+    public override string Modifiers => base.Modifiers + (IsFirework ? "f" : "");
 }
 
 [DebuggerDisplay("{DebuggerDisplay(),nq}")]
@@ -93,6 +106,7 @@ public class Touch(MaiChart chart, Rational time) : Note(chart, time)
 
     public bool IsFirework;
     public string TouchSize = chart.DefaultTouchSize;
+    public float CustomRadius; // Visual radius only; TouchArea still selects physical judgment.
 
     public string TouchArea
     {
@@ -130,6 +144,14 @@ public class TouchHold : Touch
 
     internal override string DebuggerDisplay() => $"{TouchArea}h{Modifiers}{Duration.DebuggerDisplay()}";
 }
+
+/// <summary>
+/// touchstar 简写（AquaMai mod 扩展语法 `B4$`）：只有星头、没有 slide 轨迹的 touch 区五瓣星。
+/// 输出 NMSTP/MNSTP/BRSTP 单行（行格式同 AddCustomSlide 的 touch 区星头：TAG\tbar\tgrid\tkey\t{area}\t0\tM1）。
+/// 与 slide 星头 touchstar（B1&gt;8[4:1] 等的 NMSTP）在游戏端是同一类音符。
+/// </summary>
+[DebuggerDisplay("{DebuggerDisplay(),nq}")]
+public class TouchStar(MaiChart chart, Rational time) : Touch(chart, time);
 
 // 仅用于内部实现某些trick时使用的“伪音符”。用户在正常的谱面中是不会看到这个的。
 internal class PseudoNote(MaiChart chart) : Note(chart, 0);

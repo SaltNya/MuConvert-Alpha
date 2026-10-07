@@ -12,6 +12,7 @@ public class MaiChart: BaseChart<Note>
      * Kind 为小写（sv/hs/bounce/spawn），Value 为 * 号后的原文。
      */
     public List<(Rational Time, string Kind, string Value)> Commands = [];
+    public bool HasVisualCommands;
 
     /**
      * 获得谱面开始的时刻（即谱面中第一个音符的开始时刻）。
