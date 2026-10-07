@@ -35,19 +35,9 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
     private decimal? absoluteTimeStep; // 此项必须和step本体一起更改
     private Rational extendedFalseEach = 0; // 扩展伪双押语法（多个连续的`）累计后移了多少时间。每次遇到逗号时，这个数字需要清零。
 
-    // 可重叠音符流（@{N}）：流内音符/命令不推进主谱时间，全部叠加在流起点附近。
-    private bool overlapMode; // 当前是否处于重叠流中
-    private Rational overlapBase; // 流起点（主谱时间，多条流共用）
-    private Rational streamOffset; // 流内已推进的偏移
-    private Rational mainStep = new(1, 4); // 进入流之前的主谱步长（流结束后恢复）
-    private int lastUnitLine; // 上一个单元所在的行号（用于判断流是否跨行结束）
-
-    // 当前重叠流内 SV/HS 的"流类型化曲线"输出：每条流分配自增类型键 s1/s2/...，
-    // 流内 <SV*...>/<HS*...> 输出为 `SVSP/HS <bar> <grid> s{N}=<倍率>` 类型化曲线行，
-    // 流内音符行尾附加 `s{N}` 标记字段 —— 游戏端据此把该音符的曲线类型键设为 s{N}，
-    // 只吃本流曲线、与主谱（全局/普通类型）完全隔离。
-    private int streamSeq; // 已分配的流数量（用于生成 s1/s2/...）
-    private string currentStreamId; // 当前流的类型键（如 "s1"）；不在流内时为空
+    private bool isIndependentStream; // Leading backticks are empty groups only inside an independent stream.
+    private int streamSeq;
+    private readonly List<(string Text, Rational Time, decimal Bpm, int Line)> overlayStreams = [];
 
     private ParserRuleContext? currContext; // 供调试报错AddAlert函数使用
     private Note? currNote; // 用于在部分visitor之间传递额外的参数，如visitDuration、visitSlideBody等，都需要Note对象作为参数传入的情况
@@ -78,12 +68,62 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
     [GeneratedRegex(@"(?<!\[[^\]]*|\{[^\}]*)#.*$", RegexOptions.Multiline)]
     private static partial Regex InlineSharpCommentRegex(); // 这里仅处理#开头的注释，因为||开头的注释在语法文件里已经处理过了。
 
+    private static string StripBlockComments(string text)
+    {
+        var result = text.ToCharArray();
+        var inComment = false;
+        for (var i = 0; i < result.Length; i++)
+        {
+            if (!inComment && i + 1 < result.Length && result[i] == '|' && result[i + 1] == '*')
+            {
+                inComment = true;
+                result[i] = result[i + 1] = ' ';
+                i++;
+                continue;
+            }
+            if (inComment && i + 1 < result.Length && result[i] == '*' && result[i + 1] == '|')
+            {
+                result[i] = result[i + 1] = ' ';
+                inComment = false;
+                i++;
+                continue;
+            }
+            if (inComment && result[i] != '\r' && result[i] != '\n')
+                result[i] = ' ';
+        }
+        return new string(result);
+    }
+
     private string Preprocess(string text)
     {
-        // 移除注释
-        text = InlineSharpCommentRegex().Replace(text, "");
-
-        return text;
+        text = StripBlockComments(text);
+        if (!preserveEditorDirectives) text = SimaiEditorDirectives.Strip(text);
+        // The reference consumes an alpha command before looking for inline
+        // comments. A # in quoted TEXT (or a HTML color) belongs to its body.
+        var commands = Regex.Matches(text, @"<[A-Za-z]+\*[^>\r\n]*>");
+        var protectedCommand = new bool[text.Length];
+        foreach (Match command in commands)
+            for (var i = command.Index; i < command.Index + command.Length; i++) protectedCommand[i] = true;
+        var result = text.ToCharArray();
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '#' || protectedCommand[i]) continue;
+            var comment = InlineSharpCommentRegex().Match(text, i);
+            if (!comment.Success || comment.Index != i) continue;
+            for (var j = i; j < i + comment.Length; j++) if (result[j] != '\r' && result[j] != '\n') result[j] = ' ';
+            i += comment.Length - 1;
+        }
+        // Majdata ignores an empty first simultaneous-note group: ,/4, is
+        // the same slot as ,4,. Keep command text and all comma timing intact.
+        var previous = ',';
+        for (var i = 0; i < result.Length; i++)
+        {
+            if (protectedCommand[i]) { previous = result[i]; continue; }
+            if (char.IsWhiteSpace(result[i])) continue;
+            if (result[i] == '/' && previous == ',') { result[i] = ' '; continue; }
+            previous = result[i];
+        }
+        return new string(result);
     }
 
     /**
@@ -150,7 +190,7 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             parser.RemoveErrorListeners();
             parser.AddErrorListener(new ErrorListener(this));
             root = parser.chart();
-            if (root.children.Count == 1)
+            if (root.GetText() == "<EOF>")
             { // 只有一个EOF
                 alerts.Add(new Alert(Error, Locale.NoNotesInChart)); 
                 throw new ConversionException(alerts);
@@ -198,35 +238,19 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
     {
         foreach (var notations in context.notations())
         {
-            var line = notations.Start.Line;
-            var isMarker = notations.overlapMarker() is { Length: > 0 }; // 注意：* 循环内的子规则只生成数组版访问器，不能与 null 比较
-            if (overlapMode && !isMarker && line != lastUnitLine)
-            { // 重叠流内遇到新行且不是新流标记 → 主谱行开始，流结束：恢复主谱时间与步长
-                overlapMode = false;
-                now = overlapBase;
-                step = mainStep;
-            }
-            if (overlapMode)
-            { // 重叠流期间：主谱时间不动，音符/命令时刻 = 流起点 + 流内偏移
-                now = isMarker ? overlapBase : overlapBase + streamOffset;
-            }
             VisitNotations(notations);
             if (chart.BpmList.Count == 0) AddDefaultBpm();
             if (extendedFalseEach > 0)
-            { // 如果之前的解析过程中，触发了extendedFalseEach的话。则要把被额外增加的时间扣回来。
+            {
                 now -= extendedFalseEach;
                 extendedFalseEach = 0;
             }
-            if (overlapMode)
-            { // 流内：只推进流内偏移（流开始单元也推进一步）
-                streamOffset = (streamOffset + step).CanonicalForm;
-            }
-            else
-            {
-                now = (now + step).CanonicalForm;
-            }
-            lastUnitLine = line;
+            now = (now + step).CanonicalForm;
         }
+        ApplyFakeState();
+        ApplyVisualState();
+        MergeOverlayStreams();
+        MarkReferencePresentation();
         return true;
     }
 
@@ -252,12 +276,27 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
 
     public sealed override object VisitNotations(P.NotationsContext context)
     { // 形如 (120){4}1/1 算作一组notations
+        // Display commands consume no chart time. A BPM declared after those
+        // commands in this same comma group also governs their beat lengths
+        // and the chart's first offset. Do not inject 60 before reaching it.
+        P.BpmTagContext? initialBpm = null;
+        if (chart.BpmList.Count == 0)
+        {
+            foreach (var child in context.children ?? [])
+            {
+                if (child is P.NoteGroupContext or P.AbsulouteStepTagContext) break;
+                if (child is not P.BpmTagContext bpm || SubtreeHasException(bpm)) continue;
+                initialBpm = bpm;
+                VisitBpmTag(bpm);
+                break;
+            }
+        }
         foreach (var child in context.children ?? [])
         {
             if (child is IErrorNode) continue; // 忽略错误节点
             if (child is P.BpmTagContext bpmTag)
             {
-                VisitBpmTag(bpmTag);
+                if (bpmTag != initialBpm) VisitBpmTag(bpmTag);
             }
             else if (child is P.MetTagContext metTag)
             {
@@ -267,9 +306,9 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             {
                 VisitCommandTag(commandTag);
             }
-            else if (child is P.OverlapMarkerContext overlapMarker)
+            else if (child is P.OverlayStreamContext overlayStream)
             {
-                VisitOverlapMarker(overlapMarker);
+                VisitOverlayStream(overlayStream);
             }
             else if (child is P.WaveTimeSigContext waveTimeSig)
             {
@@ -356,23 +395,15 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         return true;
     }
 
-    public sealed override object VisitOverlapMarker(P.OverlapMarkerContext context)
-    { // 可重叠音符流：@{N} 从当前时间起按 1/N 分拍独立推进，不推进主谱时间
+    public sealed override object VisitOverlayStream(P.OverlayStreamContext context)
+    {
         if (SubtreeHasException(context)) return false;
-        currContext = context;
-        if (!overlapMode)
-        { // 第一条流：记录流起点与主谱步长（多条连续流共用同一流起点）
-            overlapBase = now;
-            mainStep = step;
-            overlapMode = true;
-        }
-        streamOffset = 0; // 每条流都从流起点重新开始
-        streamSeq++; // 分配流类型键 s1/s2/...（每条流独立曲线，互不延续）
-        currentStreamId = "s" + streamSeq;
-        var text = context.OVERLAP_MARKER().GetText(); // 形如 @{128}
-        var quaver = int.Parse(text.Substring(2, text.Length - 3));
-        step = new Rational(1, quaver);
-        absoluteTimeStep = null;
+        if (chart.BpmList.Count == 0) AddDefaultBpm();
+        var text = context.OVERLAY_STREAM().GetText();
+        var content = text.StartsWith("@*") ? text[2..^2] : text[1..];
+        if (!Regex.IsMatch(content, @"^\s*\{[1-9][0-9]*\}"))
+            throw new ArgumentException("Independent stream must begin with a positive {division}.");
+        overlayStreams.Add((content, now, chart.BpmList.Find(now).Bpm, context.Start.Line));
         return true;
     }
 
@@ -397,15 +428,41 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         if (star <= 0) return true;
         var kind = inner[..star].ToLowerInvariant();
         var value = inner[(star + 1)..].Trim();
-        if (overlapMode && kind is "sv" or "hs")
-        { // 重叠流内的 SV/HS 是"流局部"演出：输出为流类型化曲线行（类型键 s{N}=倍率），
-            // 流内音符行尾带 s{N} 标记后只吃本流曲线——不进入全局键，
-            // 不会像全局曲线那样影响流外的后续音符。
-            chart.Commands.Add((now, kind, currentStreamId + "=" + value));
+        if (AquaMai.ChartVisuals.MediaCommands.IsKind(kind))
+        {
+            if (chart.BpmList.Count == 0) AddDefaultBpm();
+            if (AquaMai.ChartVisuals.MediaCommands.TryParse(kind, value, (float)chart.BpmList.Find(now).Bpm, out var media))
+                chart.Commands.Add((now, kind, media.Encode()));
+            else AddAlert(Warning, "Invalid " + kind.ToUpperInvariant() + " form: " + value);
             return true;
         }
-        if (kind is "sv" or "hs" or "bounce" or "spawn")
+        if (kind == "text")
+        {
+            if (chart.BpmList.Count == 0) AddDefaultBpm();
+            if (AquaMai.ChartVisuals.SubtitleCommands.TryParse(value, (float)chart.BpmList.Find(now).Bpm, out var subtitle))
+                chart.Commands.Add((now, kind, subtitle.Encode()));
+            else AddAlert(Warning, "Invalid TEXT form: " + value);
+            return true;
+        }
+        // Cabinet play has no editor side panels or outer display area.
+        if (kind is "showjudgeinfo" or "showcomboinfo" or "outerbrightness") return true;
+        if (AquaMai.ChartVisuals.PresentationCommands.IsKind(kind))
+        {
+            if (chart.BpmList.Count == 0) AddDefaultBpm();
+            if (AquaMai.ChartVisuals.PresentationCommands.TryParse(kind, value, (float)chart.BpmList.Find(now).Bpm, out var presentation))
+                chart.Commands.Add((now, presentation.Kind, presentation.Encode()));
+            else AddAlert(Warning, "Invalid or unsupported " + kind.ToUpperInvariant() + " form: " + value);
+            return true;
+        }
+        if (AquaMai.ChartVisuals.RingState.IsKind(kind) &&
+            !AquaMai.ChartVisuals.RingState.TryParse(kind, value, 0, out _))
+        {
+            AddAlert(Warning, "Invalid " + kind.ToUpperInvariant() + " command: " + value);
+            return true;
+        }
+        if (kind is "sv" or "hs" or "bounce" or "fake" || AquaMai.ChartVisuals.RingState.IsKind(kind) || AquaMai.ChartVisuals.VisualState.IsKind(kind))
             chart.Commands.Add((now, kind, value));
+        else AddAlert(Warning, "Unsupported command was not converted: " + text);
         return true;
     }
 
@@ -413,18 +470,23 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
     /// A 区位置就是按键本身（AquaMai 约定：6>A3 按 6>3 处理，转原版slide），返回 ("", key)。</summary>
     private static (string, int) ParseTouchArea(string text)
     {
+        // D 区位置（Majdata 新版语法 "7d"，= 与环键 7 同编号的 D 区点）：对应 AquaMai code 的 'D'+数字，
+        // 生成侧与 B/E 区同样处理（EndArea="D"）。
+        if (text.Length == 2 && text[1] == 'd' && text[0] >= '1' && text[0] <= '8')
+            return ("D", text[0] - '0');
         if (text.Length >= 2 && int.TryParse(text[1..], out var key) && key >= 1 && key <= 8)
-            return text[0] == 'A' ? ("", key) : (text[..1], key);
+            return (text[..1], key); // A 区=相邻环键中间的触摸区（游戏端 F 命令），与 B/D/E 一样保留区名
         return (text, 0); // C
     }
 
     public sealed override object VisitNoteGroup(P.NoteGroupContext context)
     { // 同一时刻出现的（双押，伪双押，同头星星...）构成一个NoteGroup。例如"1/2`3/4"，`1-2*-3[2:1]/4-5*-6[4:1]`都是NoteGroup。
         currContext = context;
-        int falseEachIdx = 0;
+        int falseEachIdx = isIndependentStream ? context.FALSE_EACH()?.GetText().Length ?? 0 : 0;
         foreach (var child in context.children)
         {
             if (child is IErrorNode) continue; // 忽略错误节点
+            if (child is ITerminalNode leading && leading.Symbol.Type == L.FALSE_EACH) continue;
             P.NoteContext noteC;
             if (child is P.NoteContext c1) noteC = c1;
             else if (child is P.EachNoteContext c2)
@@ -432,6 +494,13 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
                 noteC = c2.note();
                 if (noteC == null)
                 {
+                    // Alpha allows an empty fake-each group, e.g. 6`/B3/B4.
+                    // Its separator still advances the following group.
+                    if (c2.sep.Type == L.FALSE_EACH)
+                    {
+                        falseEachIdx += c2.sep.Text.Length;
+                        continue;
+                    }
                     AlertExtraToken(c2.sep.Text);
                     continue;
                 }
@@ -462,7 +531,6 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             foreach (var note in result)
             {
                 note.FalseEachIdx = falseEachIdx;
-                if (overlapMode) note.StreamId = currentStreamId; // 流内音符标记所属流类型键
                 chart.Notes.Add(note);
             }
         }
@@ -483,20 +551,35 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             Note note;
             switch (child)
             {
+                case P.NoiseZoneContext noiseC:
+                    VisitNoiseZone(noiseC);
+                    continue;
+                case P.BorrowedNoteContext borrowedC:
+                    note = (BorrowedNote)VisitBorrowedNote(borrowedC);
+                    break;
                 case P.TapContext tapC:
                     note = (Tap)VisitTap(tapC);
                     break;
                 case P.HoldContext holdC:
                     note = (Hold)VisitHold(holdC);
                     break;
+                case P.TapHoldContext tapHoldC:
+                    note = (Hold)VisitTapHold(tapHoldC);
+                    break;
                 case P.TouchContext touchC:
                     note = (Touch)VisitTouch(touchC);
+                    break;
+                case P.TouchStarContext touchStarC:
+                    note = (TouchStar)VisitTouchStar(touchStarC);
                     break;
                 case P.TouchHoldContext touchHoldC:
                     note = (TouchHold)VisitTouchHold(touchHoldC);
                     break;
                 case P.SlideContext slideC:
                     note = (Slide)VisitSlide(slideC);
+                    break;
+                case P.SlideCodeNoteContext slideCodeC:
+                    note = (Slide)VisitSlideCodeNote(slideCodeC);
                     break;
                 case P.SharedHeadSlideContext shSlideC:
                     note = (Slide)VisitSharedHeadSlide(shSlideC);
@@ -507,6 +590,10 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
                 default:
                     throw Utils.Fail();
             }
+            // A bare SC route has no nested duration and arrives through the
+            // skin-shaped token; the reference distinguishes its body here.
+            if (note is not BorrowedNote && AquaMai.Alpha053.Core.SlidePathParser.TryTakeTrajectoryBorrow(child.GetText(), out _, out _))
+                note = BuildBorrowedNote(child.GetText());
             result.Add(note);
 
             if (extraModifiers.Count > 0)
@@ -514,9 +601,22 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
                 AddAlert(Warning, string.Format(Locale.ExtraModifiersIgnored, string.Join("", extraModifiers.Select(x=>x.Text))), (ParserRuleContext)child);
             }
         }
+        // MajSimai scans the entire note expression before splitting shared
+        // paths: c on either the head or a body disables SV for all its parts.
+        // Inspect modifier tokens only so a skin filename containing c is inert.
+        bool HasSVOptOut(IParseTree tree) => tree is ITerminalNode terminal
+            ? terminal.Symbol.Type == L.MODIFIER && terminal.GetText() == "c"
+            : Enumerable.Range(0, tree.ChildCount).Any(i => HasSVOptOut(tree.GetChild(i)));
+        if (HasSVOptOut(context))
+            foreach (var note in result)
+            {
+                note.IgnoreSV = true;
+                if (note is Slide { OwnHead: not null } slide) slide.OwnHead.IgnoreSV = true;
+            }
+        SplitHoldSlideHeads(result);
         return result;
     }
-    
+
     public sealed override object VisitNumber(P.NumberContext context)
     {
         return decimal.Parse(context.GetText(), CultureInfo.InvariantCulture);
@@ -536,7 +636,22 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
                 if (token.Text == "m" && !note.IsMine) note.IsMine = true;
                 else if (token.Text == "b" && !note.IsBreak) note.IsBreak = true;
                 else if (token.Text == "x" && !note.IsEx) note.IsEx = true;
+                else if (token.Text == "c") note.IgnoreSV = true;
                 else if (token.Text == "f" && note is Touch { IsFirework: false } touch) touch.IsFirework = true;
+                else if (token.Text == "f" && note is Tap { IsFirework: false } tap) tap.IsFirework = true;
+                else if (token.Text == "f" && note is Slide slide)
+                {
+                    if (modifiers.Parent is P.SlideBodyContext)
+                    {
+                        AddAlert(Error, "Firework f must be written on the slide head.");
+                        throw new ConversionException(alerts);
+                    }
+                    // Legacy SC keeps its existing whole-note modifier site;
+                    // Firework belongs to its single head, never moving body.
+                    var root = slide.SharedHeadWithRoot;
+                    if (root.OwnHead != null) root.OwnHead.IsFirework = true;
+                    else root.HeadIsFirework = true;
+                }
                 else extraModifiers.Add(token);
             }
         }
@@ -559,10 +674,16 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         currContext = context;
         var result = new Tap(chart, now)
         {
-            Key = int.Parse(context.KEY().GetText())
+            Key = int.Parse((context.KEY()?.GetText() ?? context.D_ZONE().GetText()).Substring(0, 1)),
+            IsDZone = context.D_ZONE() != null
         };
+        ReadNoteSkin(context.noteSkin(), result);
         ApplyModifiers([context.modifiers()], result);
-        if (context.Parent is not P.SlideContext && GetModifier(L.TAP_TO_STAR)) result = new Star(result); // 发现了”TAP_TO_STAR“的标记，把Tap转换为星星
+        var stars = 0;
+        while (GetModifier(L.TAP_TO_STAR, out var text)) stars += text.Length;
+        if (stars > 2) { AddAlert(Error, "A star accepts at most two $ modifiers."); throw new ConversionException(alerts); }
+        if (stars > 0 && context.Parent is not P.SlideContext)
+            result = new Star(result) { IsForcedStar = true, IsFakeRotate = stars == 2 };
         return result;
     }
 
@@ -573,6 +694,22 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         {
             TouchArea = context.TOUCH_AREA().GetText()
         };
+        result.CustomRadius = ReadTouchRadius(context.radiusOverride(), result);
+        ReadNoteSkin(context.noteSkin(), result);
+        ApplyModifiers([context.modifiers()], result);
+        return result;
+    }
+
+    public sealed override object VisitTouchStar(P.TouchStarContext context)
+    {
+        // B4$ 简写 touchstar：只有星头没有轨迹；$ 后的修饰符 m=地雷 / b=绝赞 由 ApplyModifiers 消费。
+        currContext = context;
+        var result = new TouchStar(chart, now)
+        {
+            TouchArea = context.TOUCH_AREA().GetText()
+        };
+        result.CustomRadius = ReadTouchRadius(context.radiusOverride(), result);
+        ReadNoteSkin(context.noteSkin(), result);
         ApplyModifiers([context.modifiers()], result);
         return result;
     }
@@ -601,12 +738,30 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         currContext = context;
         var result = new Hold(chart, now)
         {
-            Key = int.Parse(context.KEY().GetText())
+            Key = int.Parse((context.KEY()?.GetText() ?? context.D_ZONE().GetText()).Substring(0, 1)),
+            IsDZone = context.D_ZONE() != null
         };
         currNote = result;
         var duration = (Duration)VisitDuration(context.duration());
         result.Duration = duration;
 
+        ReadNoteSkin(context.noteSkin(), result);
+        ApplyModifiers(context.modifiers(), result);
+        return result;
+    }
+
+    public sealed override object VisitTapHold(P.TapHoldContext context)
+    {
+        // 7[4:2] 省略 h 的 hold 简写：与 VisitHold 等价，modifiers 可出现在 duration 前后
+        currContext = context;
+        var result = new Hold(chart, now)
+        {
+            Key = int.Parse((context.KEY()?.GetText() ?? context.D_ZONE().GetText()).Substring(0, 1)),
+            IsDZone = context.D_ZONE() != null
+        };
+        currNote = result;
+        var duration = (Duration)VisitDuration(context.duration());
+        result.Duration = duration;
         ApplyModifiers(context.modifiers(), result);
         return result;
     }
@@ -622,6 +777,7 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         var duration = (Duration)VisitDuration(context.duration());
         result.Duration = duration;
         
+        ReadNoteSkin(context.noteSkin(), result);
         ApplyModifiers(context.modifiers(), result);
         return result;
     }
@@ -671,10 +827,10 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
     {
         var slide = (Slide)currNote!;
         
-        Utils.Assert(context.slideType().Length == context.KEY().Length + context.TOUCH_AREA().Length);
-        // 依次取本段终点：可能是按键（KEY）也可能是touch区（TOUCH_AREA）
+        Utils.Assert(context.slideType().Length == context.KEY().Length + context.TOUCH_AREA().Length + context.D_ZONE().Length);
+        // 依次取本段终点：可能是按键（KEY）、touch区（TOUCH_AREA）或 D 区位置（D_ZONE，Majdata 的 "7d"）
         var endTokens = (context.children ?? [])
-            .Where(c => c is ITerminalNode t && (t.Symbol.Type == L.KEY || t.Symbol.Type == L.TOUCH_AREA))
+            .Where(c => c is ITerminalNode t && (t.Symbol.Type == L.KEY || t.Symbol.Type == L.TOUCH_AREA || t.Symbol.Type == L.D_ZONE))
             .Cast<ITerminalNode>()
             .ToList();
         for (int i = 0; i < context.slideType().Length; i++)
@@ -682,7 +838,7 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             var endText = endTokens[i].GetText();
             var key = 0;
             var endArea = "";
-            if (endTokens[i].Symbol.Type == L.TOUCH_AREA)
+            if (endTokens[i].Symbol.Type == L.TOUCH_AREA || endTokens[i].Symbol.Type == L.D_ZONE)
             {
                 (endArea, key) = ParseTouchArea(endText);
             }
@@ -692,7 +848,13 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             }
             var segment = new SlideSegment((Slide)currNote!)
             {
-                Type = SlideTypeTool.FromSimai(context.slideType()[i].GetText(), slide.EndKey, key), // 在新的segment被添加之前，此前的slide部分的EndKey就是新segment的StartKey
+                Type = context.slideType()[i].GetText().StartsWith("V") &&
+                    ((slide.StartArea != "" && !slide.StartIsDZone) || context.TOUCH_AREA().Length > 0)
+                    ? SlideType.SLR // TouchSlide follows its explicit middle node.
+                    : SlideTypeTool.FromSimai(context.slideType()[i].GetText(), slide.EndKey, key,
+                    slide.StartArea != "" || context.TOUCH_AREA().Length > 0 || context.D_ZONE().Length > 0),
+                RawShape = context.slideType()[i].GetText(),
+                EndIsDZone = endTokens[i].Symbol.Type == L.D_ZONE,
                 EndKey = key,
                 EndArea = endArea
             };
@@ -734,6 +896,20 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         else throw Utils.Fail("duration的个数不对"); // 已经在语法层做过检查了，所以这个分支按说是永远不会命中的。
 
         ApplyModifiers(context.modifiers(), slide, false);
+        if (slide.HasSelectableOrbit)
+        {
+            // Validate only the new selector syntax; preserve raw legacy SC.
+            // The actual reference refuses zero-length C orbits and mixed
+            // Touch paths containing key-only shapes such as wifi/thunder.
+            var error = "Invalid selectable-orbit slide";
+            if (!AquaMai.Alpha053.Core.SlidePathParser.TryParsePath(
+                    slide.GetTouchPathExpression() + "[4:1]", out var path) ||
+                !AquaMai.Alpha053.Core.SlideSyntaxValidator.TryValidate(path, out error))
+            {
+                AddAlert(Error, error);
+                throw new ConversionException(alerts);
+            }
+        }
         if (StrictLevel != StrictLevelEnum.Strict && slide.OwnHead is Star)
         { // 在VisitSlide中构造星星头时没有检测到任何特殊修饰符，所以被按常规方法构造了。
             // 这里我们再检查一次，如果有修饰符的话应用之并给警告
@@ -742,6 +918,7 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
                 var key = slide.OwnHead.Key;
                 slide.OwnHead = null;
                 slide.Key = key;
+                slide.NoHead = true;
                 AddAlert(Warning, string.Format(Locale.FixModifiersOnHead, t));
             }
             else if (GetModifier(L.STAR_TO_TAP, out var t2))
@@ -755,13 +932,29 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
 
     public sealed override object VisitSlide(P.SlideContext context)
     {
+        if (context.tap()?.noteSkin() != null) throw new ArgumentException("~ 图片皮肤暂不支持普通 slide。");
         currContext = context;
         var result = new Slide(chart, now);
         
-        if (context.tap() != null)
+        if (context.holdSlideHead() != null)
+        {
+            var head = (Hold)VisitHoldSlideHead(context.holdSlideHead());
+            result.OwnHead = head;
+            result.StartIsDZone = head.IsDZone;
+        }
+        else if (context.touchHoldSlideHead() != null)
+        {
+            var head = (TouchHold)VisitTouchHoldSlideHead(context.touchHoldSlideHead());
+            (result.StartArea, result.Key) = ParseTouchArea(head.TouchArea);
+            result.NoHead = true;
+            HoldSlideHeads.States.Add(result, new HoldSlideHeads.State(head,
+                context.touchHoldSlideHead().duration() != null));
+        }
+        else if (context.tap() != null)
         { // 普通按键起点
             // 处理星星头
             Tap? head = (Tap)VisitTap(context.tap());
+            result.StartIsDZone = head.IsDZone;
             if (GetModifier(L.NO_STAR))
             { // 标记了NO_STAR的星星，则不要放head、但是需要手动设置Key
                 result.Key = head.Key;
@@ -773,14 +966,84 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         }
         else
         { // touch区起点（B1-5这种，AquaMai mod NMSSS）：无普通星头，记录StartArea
-            var headText = context.touchHead().TOUCH_AREA().GetText();
+            var headCtx = context.touchHead();
+            var headText = headCtx.TOUCH_AREA().GetText();
             (result.StartArea, result.Key) = ParseTouchArea(headText);
-            ApplyModifiers([context.touchHead().modifiers()], result);
+            result.StartIsDZone = headText.EndsWith('d');
+            // 星星头类型只由头自己的修饰符决定：Cm- → MNSTP、Cb- → BRSTP、C-（body 带 m 也不影响）→ NMSTP（2026-08-25 用户规则）。
+            // 头的 m/b 不再写入 slide.IsMine/IsBreak——body 的绝赞/地雷位只由 body 修饰符决定（Cb-A4m → BRSTP + MNSSS，不是 MBSSS）。
+            foreach (var headMod in context.touchHead().modifiers().children ?? [])
+            {
+                if (headMod is ITerminalNode headTok)
+                {
+                    var headModText = headTok.GetText();
+                    if (headModText == "m") result.HeadIsMine = true;
+                    else if (headModText == "b") result.HeadIsBreak = true;
+                    else if (headModText == "x") result.IsEx = true;
+                    else if (headModText == "f") result.HeadIsFirework = true;
+                    else if (headModText == "c") result.IgnoreSV = true;
+                    else extraModifiers.Add(headTok.Symbol); // ? / ! / $ / @ 等留待 GetModifier / 尾部警告
+                }
+            }
             if (GetModifier(L.NO_STAR)) result.NoHead = true; // touch区起点也可以写?/!去掉touchstar头
         }
         
         currNote = result;
         VisitSlideBody(context.slideBody());
+        CompleteHoldSlideHead(result, context);
+        return result;
+    }
+
+    /// <summary>自定义滑条 code 直通（Majdata 的 SC shape，如 3Q5K7[8:2] / 7Q1K3b[8:2]）：
+    /// Q5/P5 的 5 是 Orbit 圆编号而非键位、K 是终点命令，无法用 SlideSegment 建模，
+    /// 于是整段 code 原样交给生成器写进 ma2 自定义滑条第 7 列（游戏端 AquaMai SlideCodeParser 解析）。
+    /// 起点是环键 → 星头 NMSTR 系列；起点是 touch/D 区 → NMSTP 系列。</summary>
+    public sealed override object VisitSlideCodeNote(P.SlideCodeNoteContext context)
+    {
+        currContext = context;
+        var code = context.SLIDE_CODE().GetText();
+        if (code.All(c => "1234567890ABCPQK".Contains(c)) &&
+            !AquaMai.ChartVisuals.CanonicalSlideCodeParser.TryParse(code, out _, out var codeError))
+        {
+            AddAlert(Error, codeError);
+            throw new ConversionException(alerts);
+        }
+        var result = new Slide(chart, now) { RawCustomCode = code };
+
+        var c0 = code[0];
+        if (c0 >= '1' && c0 <= '8')
+        {
+            result.Key = c0 - '0';
+            result.OwnHead = new Star(new Tap(chart, now) { Key = result.Key });
+        }
+        else
+        { // touch/D 区起点：与 touchHead 同样处理（无普通星头，记录 StartArea）
+            var headText = code.Length >= 2 && code[1] == 'd' ? code[..2] : code[..1];
+            (result.StartArea, result.Key) = ParseTouchArea(headText);
+        }
+
+        currNote = result; // Duration must belong to this SC slide, including at chart start.
+        var durationSet = false;
+        foreach (var child in context.children ?? [])
+        {
+            if (child is P.SlideDurationContext durCtx && !durationSet)
+            {
+                durationSet = true;
+                var (waitTime, duration) = ((Duration?, Duration))VisitSlideDuration(durCtx);
+                if (waitTime != null) result.WaitTime = waitTime;
+                result.Duration = duration;
+            }
+        }
+
+        ApplyModifiers([context.modifiers()], result, false);
+        // code 语法里没有单独的头修饰符位置（b/m/x 写在 code 之后，覆盖整条星星），
+        // 因此把头一并同步：7Q1K3b → BRSSS + BRSTR。
+        if (result.OwnHead != null)
+        {
+            result.OwnHead.IsBreak = result.IsBreak;
+            result.OwnHead.IsMine = result.IsMine;
+            result.OwnHead.IsEx = result.IsEx;
+        }
         return result;
     }
 
@@ -792,14 +1055,22 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
         {
             result.SharedHeadWith = prevSlide.SharedHeadWith??prevSlide;
             result.StartArea = prevSlide.StartArea; // 同头星星继承起点的区域（touch区也继承）
+            result.StartIsDZone = prevSlide.StartIsDZone;
             // 链段续写（*5-3 带显式起点键）：段起点=该键（合法谱面中=上段终点），供段类型计算/生成器取起点。
             // 无键的同头（*-6）：起点=星头键（Slide.Key 经 SharedHeadWith 链到树根），此处不设 override。
-            var startKeyTok = context.KEY();       // (KEY | TOUCH_AREA)? 可选 → 单元素访问器，null=缺省
+            var startKeyTok = context.KEY();       // (KEY | TOUCH_AREA | D_ZONE)? 可选 → 单元素访问器，null=缺省
             var startAreaTok = context.TOUCH_AREA();
-            if (startKeyTok != null || startAreaTok != null)
+            var startDZoneTok = context.D_ZONE();
+            if (startKeyTok != null || startAreaTok != null || startDZoneTok != null)
             {
-                var startText = startKeyTok != null ? startKeyTok.GetText() : startAreaTok!.GetText();
+                var startText = startKeyTok != null ? startKeyTok.GetText()
+                    : startAreaTok != null ? startAreaTok.GetText() : startDZoneTok!.GetText();
                 var startKey = startKeyTok != null ? int.Parse(startText) : ParseTouchArea(startText).Item2;
+                result.StartIsDZone = startDZoneTok != null;
+                if (startKeyTok == null)
+                { // 显式给了区域起点（*B1-5 / *7d-5）：区域也从该起点取，否则会继承上一条的起区
+                    result.StartArea = ParseTouchArea(startText).Item1;
+                }
                 if (startKey != prevSlide.EndKey)
                     AddAlert(Warning, string.Format(Locale.InvalidSlide, $"{startText} (shared-head start {startKey} != previous segment end {prevSlide.EndKey})")); // 仅警告，仍以谱面为准
                 result.startKeyOverride = startKey;

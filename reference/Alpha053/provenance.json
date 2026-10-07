@@ -1,0 +1,104 @@
+[
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\NoteExpression.cs",
+    "sha256": "4F259A32EC97519C398CD0FE231146FD979CCFAA80011A4518A53EB4D1A56243",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\NoteExpression.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\NoteModifiers.cs",
+    "sha256": "35497656F0A16D0F81DDDCFCCA8742D4C2FC93970B29EC3BEA13622B832D4830",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\NoteModifiers.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\SlidePathParser.cs",
+    "sha256": "85832D7FEBA6389B5FBEDFECF40171668B26B2A359149EEC0C2B729CE6E19C79",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SlidePathParser.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\SlideSyntaxValidator.cs",
+    "sha256": "37882DDDCD58C37C46B45ED81E403658167536009B593EF8EDAFE57376BFE8C0",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SlideSyntaxValidator.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\SlideShapeResolver.cs",
+    "sha256": "4B3D9DBF9CA65A49D8292424FA97729E48BCADAF9DA734FB799D913AA8036E29",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SlideShapeResolver.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\SlideCodeParser.cs",
+    "sha256": "2F3AABF7A52E04A74D67683FE5FDBF90790FCADBD3A60E13975DB47641968337",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SlideCodeParser.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\ParserMessageLocale.cs",
+    "sha256": "6621E927796E8DABEB70B9990E147EDB8C9F303D24F12CBEC15F0996F00FB872",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\ParserMessageLocale.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\TouchSlideDirection.cs",
+    "sha256": "224E895A67EBED6321217FFE47665AAA7BE73D720221E2703911F8BD2F112048",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\TouchSlideDirection.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\ChartBracketTracker.cs",
+    "sha256": "3B6F949C95BABA8EFC984F29793E2C7BA51DB8E0018019404F970F5F44A136BB",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\ChartBracketTracker.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\ChartTokens.cs",
+    "sha256": "22CADA795EBA2383925CDC49C4C30C5410091553AAEDBC29D2F2F6DA190F026E",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\ChartTokens.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\AlphaCommandBoundary.cs",
+    "sha256": "072CA457A2EF93AC09272BF6D7350E0640F03C3AE6D62973A5BACE0A3A4E5BD3",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\AlphaCommandBoundary.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\MajdataCore\\AlphaCommandGrammar.cs",
+    "sha256": "C6811312E09C9C4B540B61B394BDDAB0FE3B73BFB11D954069ADB77237B12D4A",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\AlphaCommandGrammar.cs",
+    "adaptation": "namespace only"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\Scripts\\Notes\\TrajectoryCarrierDrop.cs",
+    "sha256": "4552379871B220AA8CD452B638B7F967DC6F4F936F27C085DF7CCB7F37EC9CE8",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\TrajectoryPathGeometry.cs",
+    "adaptation": "geometry-only class; namespace and portable math/provider adapters"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\Scripts\\Notes\\TouchSlideDrop.cs",
+    "sha256": "EC6F4D3D5A3FC50E9792FF99CF5DA0B8DF98F35559FFCEB73E0C4439DA9CF9FD",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SelectableOrbitPathGeometry.cs",
+    "adaptation": "geometry-only class; namespace and portable math/provider adapters"
+  },
+  {
+    "source": "C:\\项目\\AquaMai-main\\AquaMai-main\\MajdataViewAlpha-main (1)\\MajdataViewAlpha-main\\Assets\\Scripts\\Notes\\SlideCodePathGeometry.cs",
+    "sha256": "3648B6C30BCCE594E55D4EBA7ECB5DFD8F614278E2708F3D6E880525A0533154",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\SlideCodePathGeometry.cs",
+    "adaptation": "geometry-only class; namespace and portable math/provider adapters"
+  },
+  {
+    "source": "C:\\项目\\MaiChartManager\\MaiChartManager\\AquaMai\\AquaMai.Mods\\Fancy\\GamePlay\\CustomNoteTypes\\Libs\\MajdataTangentPath.cs",
+    "sha256": "8CAEA152F8B742280DD5214C15EA778BD9E6A17EB9A6DACFD1915492DE306DEF",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\BorrowedTangentRoute.cs",
+    "adaptation": "existing reference math port, private portable namespace"
+  },
+  {
+    "source": "C:\\项目\\MaiChartManager\\MaiChartManager\\AquaMai\\AquaMai.Mods\\Fancy\\GamePlay\\CustomNoteTypes\\Libs\\MajdataRegularPath.Prefabs.cs",
+    "sha256": "F846F7BDEE25E61CCD90F202FEC53F644753BF05551A9D092E6063632FEF05A7",
+    "output": "C:\\项目\\MaiChartManager\\MaiChartManager\\MuConvert\\reference\\Alpha053\\BorrowedRouteProvider.Prefabs.cs",
+    "adaptation": "captured actual reference prefab data; z stores bar angle and is discarded by provider"
+  }
+]

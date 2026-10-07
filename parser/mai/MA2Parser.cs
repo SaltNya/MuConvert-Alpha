@@ -76,7 +76,7 @@ public class MA2Parser : IParser<MaiChart>
                 chart.ClockCount = int.Parse(values[1]) / (RSL / 4);
             // BPM和MET
             else if (cmd == "BPM" && values.Length == 4 && int.TryParse(values[1], out var bbar) && 
-                     int.TryParse(values[2], out var btick) && decimal.TryParse(values[3], out var bpm))
+                     int.TryParse(values[2], out var btick) && decimal.TryParse(values[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var bpm))
             {
                 bpmRead = true;
                 var time = bbar + new Rational(btick, RSL);
@@ -85,6 +85,13 @@ public class MA2Parser : IParser<MaiChart>
             else if (cmd == "MET" && values.Length == 5 && int.TryParse(values[1], out var _) && int.TryParse(values[2], out var _) 
                      && int.TryParse(values[3], out var _) && int.TryParse(values[4], out var _)) {} // MET不需要解析，忽略之
             else if (cmd == "SEF") {} // SEF不需要解析，忽略之
+            else if ((cmd is "COLORV" or "SIZEV" or "ALPHAV" or "SVSP" or "HS" or "BOUNCE" or "SPAWN" or "SPAWNMODE" or "DESTROY" or "TEXT" ||
+                      AquaMai.ChartVisuals.MediaCommands.IsKind(cmd.ToLowerInvariant()) || AquaMai.ChartVisuals.PresentationCommands.IsKind(cmd.ToLowerInvariant())) && values.Length == 4 &&
+                     int.TryParse(values[1], out var visualBar) && int.TryParse(values[2], out var visualTick))
+            {
+                chart.HasVisualCommands = true;
+                chart.Commands.Add((visualBar + new Rational(visualTick, RSL), cmd == "SVSP" ? "sv" : cmd.ToLowerInvariant(), values[3]));
+            }
             else if (cmd == "CLK" && values.Length == 3 && int.TryParse(values[1], out var clkBar) && int.TryParse(values[2], out var clkTick))
             { // CLK指令，现在就是添加到Chart.ExplicitClocks即可。避免“不认识的指令报错”，同时作为ClockCount的override
                 chart.ExplicitClocks ??= [];
@@ -104,6 +111,43 @@ public class MA2Parser : IParser<MaiChart>
                 Rational time = bar + new Rational(tick, RSL);
                 string cc = cmd.Length == 3 ? Cmd103.GetValueOrDefault(cmd, cmd) : cmd, md = "";
                 if (cc.Length == 5) (cc, md) = (cc[2..5], cc[..2]);
+                var streamId = values.FirstOrDefault(v => Regex.IsMatch(v, @"^s[0-9]+$"));
+                if (streamId != null) values = values.Where(v => v != streamId).ToArray();
+                var visualText = values.FirstOrDefault(v => v.StartsWith("VS|"));
+                if (visualText != null) values = values.Where(v => v != visualText).ToArray();
+                var borrowedText = values.FirstOrDefault(v => v.StartsWith("BT1|"));
+                AquaMai.ChartVisuals.BorrowedTrajectory? borrowed = null;
+                if (borrowedText != null) {
+                    if (cc != "TAP" || !values.Contains("FK") || !AquaMai.ChartVisuals.BorrowedTrajectory.Decode(borrowedText, out borrowed)) Fail("Invalid borrowed trajectory metadata", lineNo, line);
+                    values = values.Where(v => v != borrowedText).ToArray();
+                }
+                var skinText = values.FirstOrDefault(v => v.StartsWith("SK1|"));
+                string? skin = null;
+                if (skinText != null) {
+                    if (cc is not ("TAP" or "STR" or "HLD" or "TTP" or "STP" or "THO") || !AquaMai.ChartVisuals.NoteSkin.Decode(skinText, out skin)) Fail("Invalid note skin metadata", lineNo, line);
+                    values = values.Where(v => v != skinText).ToArray();
+                }
+                var radiusText = values.FirstOrDefault(v => v.StartsWith("TR1|"));
+                float radius = 0;
+                if (radiusText != null) {
+                    if (cc is not ("TTP" or "STP") || !AquaMai.ChartVisuals.TouchRadius.Decode(radiusText, out radius)) Fail("Invalid Touch radius metadata", lineNo, line);
+                    values = values.Where(v => v != radiusText).ToArray();
+                }
+                var starHeadText = values.FirstOrDefault(v => v.StartsWith("SH1|"));
+                var starRotate = false;
+                if (starHeadText != null) {
+                    if (cc != "STR" || values.Count(v => v.StartsWith("SH1|")) != 1 || !AquaMai.ChartVisuals.StarHead.Decode(starHeadText, out starRotate)) Fail("Invalid standalone star metadata", lineNo, line);
+                    values = values.Where(v => v != starHeadText).ToArray();
+                }
+                var fake = values.Contains("FK");
+                var firework = values.Contains("FW1");
+                if (firework) {
+                    if (cc is not ("TAP" or "STR" or "HLD") || values.Count(v => v == "FW1") != 1) Fail("Invalid Firework head metadata", lineNo, line);
+                    values = values.Where(v => v != "FW1").ToArray();
+                }
+                if (fake) values = values.Where(v => v != "FK").ToArray();
+                var dZone = cc is "TAP" or "STR" or "HLD" && values.Contains("DZ");
+                if (dZone) values = values.Where(v => v != "DZ").ToArray();
                 
                 int len;
                 if (cc is "TAP" or "STR")
@@ -119,9 +163,11 @@ public class MA2Parser : IParser<MaiChart>
                     note.Duration = duration;
                     if (values.Length != 5) WarnParamsCount(lineNo, line, time);
                 }
-                else if (cc == "TTP" && values.Length >= 6)
+                else if (cc is "TTP" or "STP" && values.Length >= 6)
                 {
-                    var touch = new Touch(chart, time) { TouchArea = GetTouchArea(values[4], key), IsFirework = values[5] == "1"};
+                    Touch touch = cc == "STP" ? new TouchStar(chart, time) : new Touch(chart, time);
+                    touch.TouchArea = GetTouchArea(values[4], key);
+                    touch.IsFirework = values[5] == "1";
                     note = touch;
                     if (values.Length >= 7) touch.TouchSize = values[6];
                     if (!(values.Length == 7 || (values.Length == 6 && MA2Version == 102))) WarnParamsCount(lineNo, line, time);
@@ -178,8 +224,29 @@ public class MA2Parser : IParser<MaiChart>
                 }
 
                 if (note == null) continue;
+                if (borrowed != null) {
+                    if (!AquaMai.Alpha053.Core.NoteExpressionParser.TryParse(SimaiParser.WithoutSVModifier(borrowed.Source, out _), out var carrier, out _) || carrier.trajectory == null) Fail("Invalid borrowed trajectory source", lineNo, line);
+                    note = new BorrowedNote(chart, time, borrowed) {
+                        IsBreak = carrier.modifiers.HasHead(AquaMai.Alpha053.Core.NoteModifierFlags.Break),
+                        IsEx = carrier.modifiers.HasHead(AquaMai.Alpha053.Core.NoteModifierFlags.Ex),
+                        IsMine = carrier.modifiers.HasHead(AquaMai.Alpha053.Core.NoteModifierFlags.Mine)
+                    };
+                }
+                if (radiusText != null) {
+                    if (note is not Touch radiusTouch || note is TouchHold || !AquaMai.ChartVisuals.TouchRadius.IsArea(radiusTouch.TouchArea)) Fail("Invalid Touch radius area", lineNo, line);
+                    ((Touch)note).CustomRadius = radius;
+                }
+                note.StreamId = streamId;
+                note.Skin = skin;
+                if (firework && note is Tap fireworkHead) fireworkHead.IsFirework = true;
+                if (starHeadText != null && note is Star starHead) { starHead.IsForcedStar = true; starHead.IsFakeRotate = starRotate; }
+                note.IsFake = fake;
+                if (visualText != null) { note.Visual = AquaMai.ChartVisuals.VisualNote.Decode(visualText); note.IgnoreSV = note.Visual.IgnoreSV; chart.HasVisualCommands = true; }
+                if (note is Tap ringNote) ringNote.IsDZone = dZone;
                 switch (md)
                 {
+                    case "MN": note.IsMine = true; break;
+                    case "MB": note.IsMine = true; note.IsBreak = true; break;
                     case "BR":
                         note.IsBreak = true;
                         break;
