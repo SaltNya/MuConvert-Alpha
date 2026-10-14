@@ -8,7 +8,7 @@
 // </auto-generated>
 //------------------------------------------------------------------------------
 
-// Generated from Simai.g4 by ANTLR 4.13.1
+// Generated from parser/mai/Simai.g4 by ANTLR 4.13.1
 
 // Unreachable code detected
 #pragma warning disable 0162

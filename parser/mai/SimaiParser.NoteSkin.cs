@@ -1,10 +1,15 @@
-using AquaMai.ChartVisuals;
+﻿using AquaMai.ChartVisuals;
 using P = MuConvert.Antlr.SimaiParser;
 
 namespace MuConvert.mai;
 
 public partial class SimaiParser
 {
+    private static void ReadNoteSkin(P.NoteSkinContext[] contexts, Note note)
+    {
+        if (contexts.Length > 1) throw new ArgumentException("A hold can only specify one note skin.");
+        ReadNoteSkin(contexts.FirstOrDefault(), note);
+    }
     private static void ReadNoteSkin(P.NoteSkinContext? context, Note note)
     {
         if (context == null) return;

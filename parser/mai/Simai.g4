@@ -102,14 +102,14 @@ tap: (KEY | D_ZONE) noteSkin? modifiers;
 touchStar: TOUCH_AREA (radiusOverride | noteSkin)? TAP_TO_STAR modifiers;
 
 // 出于兼容性（以及simai本身设计的不合理？）考虑，会到处放置很多的modifiers以确保都能解析，解析的时候要把所有的modifiers取并集。
-hold: (KEY | D_ZONE) noteSkin? modifiers 'h' modifiers (duration modifiers)?;
+hold: (KEY | D_ZONE) noteSkin? modifiers 'h' modifiers noteSkin? (duration modifiers)?;
 
 // 7[4:2] 省略 h 的 hold 简写（simai 常见非标准写法；官方用 7h[4:2]）
 tapHold: (KEY | D_ZONE) modifiers duration modifiers;
 
 touch: TOUCH_AREA (radiusOverride | noteSkin)? modifiers;
 
-touchHold: TOUCH_AREA noteSkin? modifiers 'h' modifiers (duration modifiers)?;
+touchHold: TOUCH_AREA noteSkin? modifiers 'h' modifiers noteSkin? (duration modifiers)?;
 
 duration: (lp+='[')+ (beats | '#' number) (rp+=']')+;
 beats: int ':' int;
