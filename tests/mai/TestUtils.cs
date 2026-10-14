@@ -91,6 +91,7 @@ internal static class TestUtils
     }
 
     private static bool IsMa2HeaderOrBpmLine(string line) =>
+        line.StartsWith("// SINMAI_ALPHA_MODE\t", StringComparison.Ordinal) ||
         line.StartsWith("VERSION\t", StringComparison.Ordinal) ||
         line.StartsWith("FES_MODE\t", StringComparison.Ordinal) ||
         line.StartsWith("BPM_DEF\t", StringComparison.Ordinal) ||

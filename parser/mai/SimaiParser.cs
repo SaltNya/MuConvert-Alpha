@@ -247,6 +247,7 @@ public partial class SimaiParser : SimaiBaseVisitor<object>, IParser<MaiChart>
             }
             now = (now + step).CanonicalForm;
         }
+        ApplyNoiseControls();
         ApplyFakeState();
         ApplyVisualState();
         MergeOverlayStreams();

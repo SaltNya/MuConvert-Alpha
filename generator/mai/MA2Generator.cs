@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using MuConvert.generator;
 using MuConvert.utils;
@@ -802,6 +802,8 @@ GENERATED_BY	MuConvert v{8}
         StringBuilder result = new StringBuilder();
         
         GenerateFileHead(result);
+        // Explicit cosmetic opt-in; even charts with only native notes receive this tag.
+        result.AppendLine("// SINMAI_ALPHA_MODE\tAlpha");
         GenerateBPM(result);
         GenerateCommands(result);
         GenerateNotes(result);

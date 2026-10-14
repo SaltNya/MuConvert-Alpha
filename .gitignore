@@ -9,3 +9,4 @@ riderModule.iml
 /.tmp*
 *scratch*
 *.lscache
+*.bak-*

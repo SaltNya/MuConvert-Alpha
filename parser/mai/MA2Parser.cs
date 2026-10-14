@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using MuConvert.chart;
 using MuConvert.parser;
 using MuConvert.utils;
@@ -52,7 +52,7 @@ public class MA2Parser : IParser<MaiChart>
         foreach (var line in text.EnumerateLines())
         {
             lineNo++;
-            if (line.IsWhiteSpace()) continue;
+            if (line.IsWhiteSpace() || line.ToString().StartsWith("// SINMAI_ALPHA_MODE\t", StringComparison.Ordinal)) continue;
             var values = line.ToString().Split('\t');
             var cmd = values[0];
             
@@ -85,12 +85,13 @@ public class MA2Parser : IParser<MaiChart>
             else if (cmd == "MET" && values.Length == 5 && int.TryParse(values[1], out var _) && int.TryParse(values[2], out var _) 
                      && int.TryParse(values[3], out var _) && int.TryParse(values[4], out var _)) {} // MET不需要解析，忽略之
             else if (cmd == "SEF") {} // SEF不需要解析，忽略之
-            else if ((cmd is "COLORV" or "SIZEV" or "ALPHAV" or "SVSP" or "HS" or "BOUNCE" or "SPAWN" or "SPAWNMODE" or "DESTROY" or "TEXT" ||
+            else if ((cmd is "COLORV" or "SIZEV" or "ALPHAV" or "SVSP" or "HS" or "BOUNCE" or "SPAWN" or "SPAWNMODE" or "DESTROY" or "TEXT" or "NZONE" ||
                       AquaMai.ChartVisuals.MediaCommands.IsKind(cmd.ToLowerInvariant()) || AquaMai.ChartVisuals.PresentationCommands.IsKind(cmd.ToLowerInvariant())) && values.Length == 4 &&
                      int.TryParse(values[1], out var visualBar) && int.TryParse(values[2], out var visualTick))
             {
                 chart.HasVisualCommands = true;
-                chart.Commands.Add((visualBar + new Rational(visualTick, RSL), cmd == "SVSP" ? "sv" : cmd.ToLowerInvariant(), values[3]));
+                if (cmd == "NZONE" && !AquaMai.ChartVisuals.NoiseZoneSpec.TryDecode(values[3], out _)) Fail("Invalid NZONE", lineNo, line);
+                chart.Commands.Add((visualBar + new Rational(visualTick, RSL), cmd == "SVSP" ? "sv" : cmd == "NZONE" ? "noisezone" : cmd.ToLowerInvariant(), values[3]));
             }
             else if (cmd == "CLK" && values.Length == 3 && int.TryParse(values[1], out var clkBar) && int.TryParse(values[2], out var clkTick))
             { // CLK指令，现在就是添加到Chart.ExplicitClocks即可。避免“不认识的指令报错”，同时作为ClockCount的override
